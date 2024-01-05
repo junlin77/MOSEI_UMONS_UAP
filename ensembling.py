@@ -1,6 +1,8 @@
 import argparse, os, glob, pickle, warnings, torch
 import numpy as np
 from utils.pred_func import *
+from utils.uap_dataloader import UAPDataLoader
+from uap import generate_uap
 from sklearn.metrics import classification_report
 from utils.compute_args import compute_args
 from torch.utils.data import DataLoader
@@ -47,12 +49,23 @@ if __name__ == '__main__':
     # Define the splits to be evaluated
     evaluation_sets = list(sets) + ([private_set] if private_set is not None else [])
     print("Evaluated sets: ", str(evaluation_sets))
+
+    # Generate UAP
+    uap = generate_uap(net, uap_test_loaders['test'])
+
+    # Apply UAP to test data
+    uap_test_loader = UAPDataLoader(eval(args.dataloader)('test', args, train_dset.token_to_ix),
+                                    uap,
+                                    args.batch_size,
+                                    num_workers=8,
+                                    pin_memory=True)
+
     # Creating dataloader
-    train_dset = eval(args.dataloader)('train', args)
-    loaders = {set: DataLoader(eval(args.dataloader)(set, args, train_dset.token_to_ix),
-               args.batch_size,
-               num_workers=8,
-               pin_memory=True) for set in evaluation_sets}
+    # train_dset = eval(args.dataloader)('train', args)
+    # loaders = {set: DataLoader(eval(args.dataloader)(set, args, train_dset.token_to_ix),
+    #            args.batch_size,
+    #            num_workers=8,
+    #            pin_memory=True) for set in evaluation_sets}
 
     # Creating net
     net = eval(args.model)(args, train_dset.vocab_size, train_dset.pretrained_emb).cuda()
@@ -73,7 +86,7 @@ if __name__ == '__main__':
 
         # Evaluation per checkpoint predictions
         for set in evaluation_sets:
-            accuracy, preds = evaluate(net, loaders[set], args)
+            accuracy, preds = evaluate(net, uap_test_loaders[set], args)
             print('Accuracy for ' + set + ' for model ' + ckpt + ":", accuracy)
             for id, pred in preds.items():
                 if id not in ensemble_preds[set]:
@@ -82,8 +95,8 @@ if __name__ == '__main__':
 
             # Compute set ensembling accuracy
             # Get all ids and answers
-            ids = [id for ids, _, _, _, _ in loaders[set] for id in ids]
-            ans = [np.array(a) for _, _, _, _, ans in loaders[set] for a in ans]
+            ids = [id for ids, _, _, _, _ in uap_test_loaders[set] for id in ids]
+            ans = [np.array(a) for _, _, _, _, ans in uap_test_loaders[set] for a in ans]
 
             # for all id, get averaged probabilities
             avg_preds = np.array([np.mean(np.array(ensemble_preds[set][id]), axis=0) for id in ids])
